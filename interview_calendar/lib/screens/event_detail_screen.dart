@@ -372,22 +372,38 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
                   if (_event.location != null && _event.location!.isNotEmpty)
                     const SizedBox(height: 12),
 
-                  // 会议链接卡片
+                  // 会议链接卡片：点击打开链接，右侧按钮一键复制
                   if (_event.meetingUrl != null && _event.meetingUrl!.isNotEmpty)
                     _buildInfoCard(
                       icon: Icons.link,
                       title: '会议链接',
                       children: [
-                        GestureDetector(
-                          onTap: _openMeetingUrl,
-                          child: Text(
-                            _event.meetingUrl!,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: AppTheme.accent,
-                              decoration: TextDecoration.underline,
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: GestureDetector(
+                                onTap: _openMeetingUrl,
+                                child: Text(
+                                  _event.meetingUrl!,
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    color: AppTheme.accent,
+                                    decoration: TextDecoration.underline,
+                                  ),
+                                ),
+                              ),
                             ),
-                          ),
+                            const SizedBox(width: 8),
+                            IconButton(
+                              onPressed: () => _copyText(_event.meetingUrl!),
+                              icon: const Icon(Icons.copy_rounded, size: 18),
+                              color: AppTheme.primary,
+                              tooltip: '复制会议链接',
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                            ),
+                          ],
                         ),
                       ],
                     ),
