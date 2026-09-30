@@ -1,0 +1,12 @@
+config.yaml
+data/
+*.db
+__pycache__/
+*.pyc
+.venv/
+venv/
+samples/
+
+# 构建产物与日志（APK 用 GitHub Releases 分发，不进 git）
+*.apk
+*.log

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标（Android 8.0+）。
+
+  系统会把 foreground 和 background 两层叠起来，再按厂商自己的形状裁切
+  （小米是圆角方形、三星是圆形、一加是水滴形……），所以同一个图标在不同
+  手机上看起来是协调的，而不是被硬生生塞进一个方块里。
+
+  因为会被裁切，foreground 的内容必须留在中间的安全区内 —— 这一点在
+  make_icon.py 里通过把日历压在画布中央 56% 以内来保证。
+
+  Android 8 以下不认这个文件，会自动回退到 mipmap-*/ic_launcher.png。
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>

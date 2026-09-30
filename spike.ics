@@ -1,0 +1,75 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//InterviewAlert//面试邀约提醒//CN
+CALSCALE:GREGORIAN
+X-WR-CALNAME:面试安排
+X-WR-TIMEZONE:Asia/Shanghai
+REFRESH-INTERVAL;VALUE=DURATION:PT15M
+X-PUBLISHED-TTL:PT15M
+BEGIN:VEVENT
+UID:event-1@interview-alert.local
+DTSTAMP:20260919T055442Z
+SEQUENCE:0
+SUMMARY:面试：测试公司1 - 后端开发工程师（一面）
+DTSTART:20260920T063000Z
+DTEND:20260920T073000Z
+LOCATION:线上 - 腾讯会议
+URL:https://meeting.tencent.com/test
+DESCRIPTION:公司：测试公司1\n岗位：后端开发工程师\n轮次
+ ：一面\n地点：线上 - 腾讯会议\n会议链接：https://meeting.
+ tencent.com/test\n\n这是验证日历订阅链路的测试事件。\n如
+ 果你在手机日历里看到了它，说明邮件自动进日历这条
+ 路是通的。\n验证完可以直接删掉。
+LAST-MODIFIED:20260919T055442Z
+STATUS:CONFIRMED
+BEGIN:VALARM
+TRIGGER:-P1D
+ACTION:DISPLAY
+DESCRIPTION:明天有面试
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:event-2@interview-alert.local
+DTSTAMP:20260919T055442Z
+SEQUENCE:0
+SUMMARY:面试：测试公司2 - 后端开发工程师（一面）
+DTSTART:20260921T063000Z
+DTEND:20260921T073000Z
+LOCATION:线上 - 腾讯会议
+URL:https://meeting.tencent.com/test
+DESCRIPTION:公司：测试公司2\n岗位：后端开发工程师\n轮次
+ ：一面\n地点：线上 - 腾讯会议\n会议链接：https://meeting.
+ tencent.com/test\n\n这是验证日历订阅链路的测试事件。\n如
+ 果你在手机日历里看到了它，说明邮件自动进日历这条
+ 路是通的。\n验证完可以直接删掉。
+LAST-MODIFIED:20260919T055442Z
+STATUS:CONFIRMED
+BEGIN:VALARM
+TRIGGER:-P1D
+ACTION:DISPLAY
+DESCRIPTION:明天有面试
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:event-3@interview-alert.local
+DTSTAMP:20260919T055442Z
+SEQUENCE:0
+SUMMARY:面试：测试公司3 - 后端开发工程师（一面）
+DTSTART:20260924T063000Z
+DTEND:20260924T073000Z
+LOCATION:线上 - 腾讯会议
+URL:https://meeting.tencent.com/test
+DESCRIPTION:公司：测试公司3\n岗位：后端开发工程师\n轮次
+ ：一面\n地点：线上 - 腾讯会议\n会议链接：https://meeting.
+ tencent.com/test\n\n这是验证日历订阅链路的测试事件。\n如
+ 果你在手机日历里看到了它，说明邮件自动进日历这条
+ 路是通的。\n验证完可以直接删掉。
+LAST-MODIFIED:20260919T055442Z
+STATUS:CONFIRMED
+BEGIN:VALARM
+TRIGGER:-P1D
+ACTION:DISPLAY
+DESCRIPTION:明天有面试
+END:VALARM
+END:VEVENT
+END:VCALENDAR

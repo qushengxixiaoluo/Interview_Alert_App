@@ -1,0 +1,47 @@
+# 复制成 config.yaml 再填。config.yaml 已被 .gitignore 忽略，不会外泄。
+#
+# 密钥也可以改用环境变量提供（优先级高于本文件），这样凭据不落盘：
+#   INTERVIEW_ALERT_MAIL_USER / INTERVIEW_ALERT_MAIL_AUTH_CODE / INTERVIEW_ALERT_DEEPSEEK_KEY
+
+mail:
+  host: imap.qq.com
+  port: 993
+  # 完整邮箱地址，例如 12345678@qq.com
+  user: ""
+  # 16 位 IMAP 授权码。注意：不是 QQ 密码。
+  # QQ邮箱 → 设置 → 账户 → POP3/IMAP/SMTP服务 → 开启 IMAP/SMTP 服务 → 生成授权码
+  auth_code: ""
+  folder: INBOX
+  # 首次运行时只回看最近 N 天的邮件，避免把多年历史邮件全部送进大模型
+  lookback_days: 30
+  # IDLE 超时（秒）。QQ 邮箱服务端约 29 分钟断开，留点余量主动重连
+  idle_timeout: 1500
+  # 兜底轮询间隔（秒）。IDLE 静默失败时靠它补漏
+  poll_interval: 300
+
+llm:
+  base_url: https://api.deepseek.com
+  # platform.deepseek.com 申请
+  api_key: ""
+  # deepseek-chat / deepseek-reasoner 已于 2026-07-24 退役，用新模型名
+  model: deepseek-flash
+  timeout: 90
+
+reminder:
+  # 提前多少分钟提醒。1440 = 24 小时 = 「面试前一天同一时刻」
+  # 想再加一个「提前 1 小时」，写成 [1440, 60] 即可，两个提醒都会生效
+  lead_minutes: [1440]
+  # 闹钟显示的文字
+  alarm_description: "明天有面试"
+
+server:
+  host: 0.0.0.0
+  port: 8787
+
+# 事件进手机日历的方式，详见 README
+calendar:
+  # 无明确时间时，默认落在当天几点
+  default_hour: 9
+  # 默认面试时长（分钟）
+  default_duration_minutes: 60
+  timezone: Asia/Shanghai
