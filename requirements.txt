@@ -1,5 +1,0 @@
-fastapi>=0.115
-uvicorn[standard]>=0.30
-aioimaplib>=2.0
-httpx>=0.27
-PyYAML>=6.0
