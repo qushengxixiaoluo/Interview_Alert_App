@@ -4,6 +4,7 @@ import '../models/event.dart';
 import '../models/llm_profile.dart';
 import '../services/database.dart';
 import '../services/llm_service.dart';
+import '../services/extraction_to_event.dart';
 import '../services/profile_store.dart';
 import '../services/conflict_detector.dart';
 import '../theme/app_theme.dart';
@@ -172,48 +173,70 @@ class _AssistantScreenState extends State<AssistantScreen> {
       _conflict = null;
     });
 
-    final service = LlmService(_profile!);
-    final result = await service.extractFromText(text);
+    // 单一 try 包住整个异步流程：LLM 调用 + 冲突检查（会开数据库）。
+    // 任何意外都在这里兜掉，保证按钮不会永久卡在「分析中」；
+    // 每次 await 之后都检查 mounted —— 请求最长 90 秒，期间用户随时可能退出本页，
+    // 对已 dispose 的 State 调 setState 在 release 下是空断言崩溃。
+    try {
+      final service = LlmService(_profile!);
+      final result = await service.extractFromText(text);
+      if (!mounted) return;
 
-    if (result.hasError) {
-      setState(() { _loading = false; _error = result.error; });
-      return;
-    }
+      if (result.hasError) {
+        setState(() { _loading = false; _error = result.error; });
+        return;
+      }
 
-    ConflictCheck? conflict;
-    if (result.startTime != null) {
-      final endTime = result.startTime!.add(Duration(minutes: result.durationMinutes));
-      conflict = await ConflictDetector(_db).check(
-        newStart: result.startTime!,
-        newEnd: endTime,
-      );
-    }
-
-    setState(() {
-      _result = result;
-      _conflict = conflict;
-      _loading = false;
-    });
-
-    // 结果卡片在输入区下方，长输入时会生成在屏幕外 —— 自动滚过去给用户看
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final ctx = _resultKey.currentContext;
-      if (ctx != null) {
-        Scrollable.ensureVisible(
-          ctx,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
+      ConflictCheck? conflict;
+      final anchor = result.startTime ?? result.deadline;
+      if (anchor != null) {
+        final endTime = result.startTime == null
+            ? anchor
+            : result.startTime!.add(Duration(minutes: result.durationMinutes));
+        conflict = await ConflictDetector(_db).check(
+          newStart: anchor,
+          newEnd: endTime,
         );
       }
-    });
+      if (!mounted) return;
+
+      setState(() {
+        _result = result;
+        _conflict = conflict;
+        _loading = false;
+      });
+
+      // 结果卡片在输入区下方，长输入时会生成在屏幕外 —— 自动滚过去给用户看
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final ctx = _resultKey.currentContext;
+        if (ctx != null) {
+          Scrollable.ensureVisible(
+            ctx,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
+      });
+    } catch (e) {
+      // LlmService 内部已兜掉绝大多数异常；这里兜住剩余的（如数据库打不开）
+      if (mounted) {
+        setState(() { _loading = false; _error = '分析出错：$e'; });
+      }
+    }
   }
 
   Future<void> _confirmAndSave() async {
-    if (_result == null || _result!.startTime == null || _saving) return;
+    if (_result == null || _saving) return;
+    final event = _buildEvent();
+    if (event == null) {
+      // 真正兜底：界面上没有时间就不给保存入口，万一还是进来了也要有提示
+      setState(() => _error = '这条结果没有可用的时间，点「编辑后保存」补上再存');
+      return;
+    }
     setState(() => _saving = true);
 
     try {
-      final event = _buildEvent();
       await _db.insertEvent(event);
 
       if (mounted) {
@@ -250,7 +273,12 @@ class _AssistantScreenState extends State<AssistantScreen> {
   }
 
   Future<void> _editBeforeSave() async {
-    if (_result == null || _result!.startTime == null || _saving) return;
+    if (_result == null || _saving) return;
+    final event = _buildEvent();
+    if (event == null) {
+      setState(() => _error = '这条结果没有可用的时间，请先在识别结果里补上时间');
+      return;
+    }
     setState(() => _saving = true);
 
     try {
@@ -258,8 +286,8 @@ class _AssistantScreenState extends State<AssistantScreen> {
         context,
         MaterialPageRoute(
           builder: (_) => EventFormScreen(
-            initialDate: _result!.startTime!,
-            existingEvent: _buildEvent(),
+            initialDate: event.startTime,
+            existingEvent: event,
           ),
         ),
       );
@@ -277,36 +305,9 @@ class _AssistantScreenState extends State<AssistantScreen> {
     }
   }
 
-  InterviewEvent _buildEvent() {
-    return InterviewEvent(
-      title: _result!.title.isNotEmpty ? _result!.title : '面试',
-      company: _result!.company.isNotEmpty ? _result!.company : null,
-      role: _result!.role.isNotEmpty ? _result!.role : null,
-      round: _roundFromString(_result!.round),
-      startTime: _result!.startTime!,
-      endTime: _result!.startTime!.add(Duration(minutes: _result!.durationMinutes)),
-      location: _result!.location.isNotEmpty ? _result!.location : null,
-      meetingUrl: _result!.meetingUrl.isNotEmpty ? _result!.meetingUrl : null,
-      notes: [
-        if (_result!.contact.isNotEmpty) '联系人：${_result!.contact}',
-        if (_result!.summary.isNotEmpty) _result!.summary,
-        if (_result!.needsReview) '⚠ 待核对：${_result!.timeIsExplicit ? '置信度偏低' : '时间是推算的，请核对'}',
-      ].join('\n'),
-      color: EventColor.blue,
-    );
-  }
-
-  InterviewRound? _roundFromString(String round) {
-    const map = {
-      '一面': InterviewRound.first,
-      '二面': InterviewRound.second,
-      '终面': InterviewRound.finalRound,
-      'HR面': InterviewRound.hr,
-      '笔试': InterviewRound.written,
-      '测评': InterviewRound.assessment,
-    };
-    return map[round];
-  }
+  /// 与邮箱导入共用同一份映射（含截止事件的处理），避免两条链路行为不一致。
+  /// 返回 null = 抽取结果里没有可用时间。
+  InterviewEvent? _buildEvent() => eventFromExtraction(_result!);
 
   @override
   Widget build(BuildContext context) {
@@ -491,8 +492,10 @@ class _AssistantScreenState extends State<AssistantScreen> {
           if (r.role.isNotEmpty) _resultRow('岗位', r.role),
           if (r.round.isNotEmpty) _resultRow('轮次', r.round),
           if (r.startTime != null) _resultRow('时间', _formatDateTime(r.startTime!)),
-          if (!r.timeIsExplicit) _resultRow('⚠ 时间', '推算值，请核对'),
-          _resultRow('时长', '${r.durationMinutes} 分钟'),
+          if (r.deadline != null) _resultRow('截止', _formatDateTime(r.deadline!)),
+          if (r.hasTime && !r.timeIsExplicit)
+            _resultRow('⚠ 时间', '推算值，请核对'),
+          if (r.startTime != null) _resultRow('时长', '${r.durationMinutes} 分钟'),
           if (r.location.isNotEmpty) _resultRow('地点', r.location),
           if (r.meetingUrl.isNotEmpty) _resultRow('链接', r.meetingUrl),
           if (r.contact.isNotEmpty) _resultRow('联系人', r.contact),
@@ -501,37 +504,84 @@ class _AssistantScreenState extends State<AssistantScreen> {
             Text(r.summary, style: TextStyle(fontSize: 13, color: AppTheme.textSecondary.withValues(alpha: 0.8))),
           ],
           const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _saving ? null : _editBeforeSave,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppTheme.primary,
-                    side: BorderSide(color: AppTheme.buttonOutline, width: AppTheme.outlineWidth),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusMedium)),
-                  ),
-                  child: _saving
-                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Text('编辑后保存'),
-                ),
+          // 取消/拒信/Offer 不给保存入口 —— 否则「已取消的面试」也能被存进日历
+          // （邮箱自动链路由 isActionableExtraction 黑名单拦截，这里是手动链路）
+          if (isRejectedCategory(r))
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppTheme.textSecondary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: _saving ? null : _confirmAndSave,
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusMedium)),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline,
+                      size: 16, color: AppTheme.textSecondary),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '${categoryLabel.replaceAll(RegExp(r'^\S+\s'), '')}通常不需要进日历 —— 看过即可',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.textSecondary.withValues(alpha: 0.9)),
+                    ),
                   ),
-                  child: _saving
-                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : const Text('直接保存'),
-                ),
+                ],
               ),
-            ],
-          ),
+            )
+          // 没有时间锚点（既无场次也无期限）→ 不给保存入口，免得按钮点了没反应
+          else if (r.hasTime)
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _saving ? null : _editBeforeSave,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppTheme.primary,
+                      side: BorderSide(color: AppTheme.buttonOutline, width: AppTheme.outlineWidth),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusMedium)),
+                    ),
+                    child: _saving
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Text('编辑后保存'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _saving ? null : _confirmAndSave,
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusMedium)),
+                    ),
+                    child: _saving
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Text('直接保存'),
+                  ),
+                ),
+              ],
+            )
+          else
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppTheme.warning.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.info_outline, size: 16, color: AppTheme.warning),
+                  SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '没有识别到时间或截止期限，无法保存到日历',
+                      style: TextStyle(fontSize: 12, color: AppTheme.warning),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           if (r.needsReview) ...[
             const SizedBox(height: 10),
             Container(

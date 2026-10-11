@@ -33,7 +33,8 @@ class SqliteDatabaseService with EventQueryMixin implements DatabaseService {
   /// 绝对不能靠 DROP TABLE 重建 —— 那会清空用户数据。
   ///
   /// v1 → v2：新增 completed_at（标记面试完成的时刻）
-  static const int schemaVersion = 2;
+  /// v2 → v3：新增 deadline（附加截止期限）、is_deadline（事件时间本身是截止时间）
+  static const int schemaVersion = 3;
 
   static const _table = 'events';
 
@@ -77,6 +78,8 @@ class SqliteDatabaseService with EventQueryMixin implements DatabaseService {
         meeting_url  TEXT,
         color_index  INTEGER NOT NULL DEFAULT 0,
         notes        TEXT,
+        deadline     INTEGER,
+        is_deadline  INTEGER NOT NULL DEFAULT 0,
         completed_at INTEGER,
         created_at   INTEGER NOT NULL,
         updated_at   INTEGER NOT NULL
@@ -93,6 +96,15 @@ class SqliteDatabaseService with EventQueryMixin implements DatabaseService {
     // 已有记录 completed_at 为 NULL，正好表示「未完成」，语义天然对齐。
     if (oldVersion < 2) {
       await db.execute('ALTER TABLE $_table ADD COLUMN completed_at INTEGER');
+    }
+
+    // v2 → v3：测评/笔试的截止时间。
+    // 已有记录 deadline 为 NULL（没有独立期限）、is_deadline 为 0（不是截止事件），
+    // 语义正好是默认值，不需要回填。
+    if (oldVersion < 3) {
+      await db.execute('ALTER TABLE $_table ADD COLUMN deadline INTEGER');
+      await db.execute(
+          'ALTER TABLE $_table ADD COLUMN is_deadline INTEGER NOT NULL DEFAULT 0');
     }
   }
 
@@ -155,10 +167,17 @@ class SqliteDatabaseService with EventQueryMixin implements DatabaseService {
     final db = await _database;
     final start = DateTime(day.year, day.month, day.day);
     final end = start.add(const Duration(days: 1));
+    // 开始时间或附加截止期限落在这一天都算当日事件；
+    // 单行 OR 不会产生重复行，无需去重
     final rows = await db.query(
       _table,
-      where: 'start_time >= ? AND start_time < ?',
-      whereArgs: [start.millisecondsSinceEpoch, end.millisecondsSinceEpoch],
+      where: '(start_time >= ? AND start_time < ?) OR (deadline >= ? AND deadline < ?)',
+      whereArgs: [
+        start.millisecondsSinceEpoch,
+        end.millisecondsSinceEpoch,
+        start.millisecondsSinceEpoch,
+        end.millisecondsSinceEpoch,
+      ],
       orderBy: 'start_time ASC',
     );
     return rows.map(InterviewEvent.fromMap).toList();
@@ -202,8 +221,9 @@ class SqliteDatabaseService with EventQueryMixin implements DatabaseService {
 /// （几百条记录、几十 KB），JSON 文件完全够用，而且带来两个额外好处：
 /// 文件可以直接打开看、备份就是复制一个文件。
 class JsonFileDatabaseService with EventQueryMixin implements DatabaseService {
-  /// 当前数据格式版本，将来结构变化时用它做迁移
-  static const int schemaVersion = 2;
+  /// 当前数据格式版本，将来结构变化时用它做迁移。
+  /// JSON 读取走 InterviewEvent.fromMap 的字段缺失兜底，旧文件不需要显式迁移。
+  static const int schemaVersion = 3;
 
   final List<InterviewEvent> _events = [];
   int _nextId = 1;

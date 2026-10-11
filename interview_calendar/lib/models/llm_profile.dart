@@ -1,3 +1,12 @@
+/// 服务端接口格式。用户不需要关心这个 —— 由 [LlmService] 自动探测。
+enum ApiFormat {
+  /// OpenAI 兼容：POST {base}/v1/chat/completions，Bearer 鉴权
+  openAi,
+
+  /// Anthropic 原生：POST {base}/v1/messages，x-api-key 鉴权
+  anthropic,
+}
+
 /// AI 配置档案：一套 API 配置，可保存多份随时切换
 class LlmProfile {
   final String id;
@@ -24,15 +33,56 @@ class LlmProfile {
 
   bool get isConfigured => apiKey.trim().isNotEmpty && baseUrl.trim().isNotEmpty;
 
-  /// 拼接完整的 chat completions 地址
-  /// 兼容用户填 https://api.xiaomimimo.com 或 .../v1 两种写法
-  String get chatUrl {
-    var base = baseUrl.trim();
-    while (base.endsWith('/')) {
-      base = base.substring(0, base.length - 1);
+  // ============================================================
+  //  地址归一化：用户随便填（带不带 /v1、带不带接口路径、带尾斜杠）
+  //  都要能用 —— 真正的路径由 LlmService 按「404 就换下一个候选」探测。
+  // ============================================================
+
+  static String _trimSlashes(String s) {
+    var b = s;
+    while (b.endsWith('/')) {
+      b = b.substring(0, b.length - 1);
     }
-    if (!base.endsWith('/v1')) base = '$base/v1';
-    return '$base/chat/completions';
+    return b;
+  }
+
+  /// 去掉用户可能直接粘贴的完整接口路径（/chat/completions、/messages），只留站点根。
+  /// 例：`https://api.anthropic.com/v1/messages` → `https://api.anthropic.com/v1`
+  String get _bareBase {
+    var b = _trimSlashes(baseUrl.trim());
+    if (b.endsWith('/chat/completions')) {
+      b = _trimSlashes(b.substring(0, b.length - '/chat/completions'.length));
+    } else if (b.endsWith('/messages')) {
+      b = _trimSlashes(b.substring(0, b.length - '/messages'.length));
+    }
+    return b;
+  }
+
+  static final RegExp _versionRe = RegExp(r'/v\d+$');
+
+  /// 同一格式的候选地址：带 /v1 和不带 /v1 各一个（按顺序探测，去重）。
+  /// 「少打一个 /v1 就没法用」的问题在这里兜底。
+  List<String> urlsFor(ApiFormat format) {
+    final bare = _bareBase;
+    if (bare.isEmpty) return const [];
+    final suffix = format == ApiFormat.openAi ? '/chat/completions' : '/messages';
+
+    // 已经带 /v1（或用户粘贴了完整路径）→ 先按原样拼
+    final preferred = _versionRe.hasMatch(bare) ? '$bare$suffix' : '$bare/v1$suffix';
+    // 备选：去掉版本段直接拼（有的服务商把接口挂在根路径）
+    final altBase = bare.replaceFirst(_versionRe, '');
+    final alt = '$altBase$suffix';
+    return preferred == alt ? [preferred] : [preferred, alt];
+  }
+
+  /// 按域名猜一个首选格式（猜错了也没关系，探测失败会换另一个）
+  ApiFormat? get formatHint {
+    final host = baseUrl.toLowerCase();
+    if (host.contains('anthropic')) return ApiFormat.anthropic;
+    if (host.contains('openai') || host.contains('deepseek') || host.contains('xiaomimimo')) {
+      return ApiFormat.openAi;
+    }
+    return null;
   }
 
   Map<String, dynamic> toMap() => {

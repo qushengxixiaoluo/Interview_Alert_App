@@ -53,9 +53,13 @@ mixin EventQueryMixin implements DatabaseService {
   List<InterviewEvent> filterByDay(List<InterviewEvent> all, DateTime day) {
     final start = DateTime(day.year, day.month, day.day);
     final end = start.add(const Duration(days: 1));
+    bool inDay(DateTime t) => !t.isBefore(start) && t.isBefore(end);
     return all
+        // 事件的开始时间、或附加截止期限落在这一天 → 都要出现在当日列表
+        // （「10 号截止」的任务在 10 号当天必须能看到，只按 startTime 归日会漏）
         .where((e) =>
-            !e.startTime.isBefore(start) && e.startTime.isBefore(end))
+            inDay(e.startTime) ||
+            (e.deadline != null && inDay(e.deadline!)))
         .toList()
       ..sort((a, b) => a.startTime.compareTo(b.startTime));
   }

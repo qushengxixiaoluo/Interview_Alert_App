@@ -11,6 +11,11 @@ class ProcessedMailStore {
 
   static List<String>? _cache;
 
+  /// 最近一次读写失败的原因。非 null 表示「已处理记录」没存住 ——
+  /// 后果是下次同步会把同一批邮件再识别一遍（不会丢数据，但会重复弹清单），
+  /// 所以必须让界面能看见，不能静默吞掉。
+  static String? lastError;
+
   static Future<Set<String>> load() async {
     if (_cache != null) return _cache!.toSet();
     try {
@@ -22,13 +27,16 @@ class ProcessedMailStore {
       } else {
         _cache = <String>[];
       }
-    } catch (_) {
+      lastError = null;
+    } catch (e) {
       _cache = <String>[];
+      lastError = '$e';
     }
     return _cache!.toSet();
   }
 
-  static Future<void> markProcessed(Iterable<String> uids) async {
+  /// 返回是否成功写入。失败不会抛异常，但会记到 [lastError] 供界面提示。
+  static Future<bool> markProcessed(Iterable<String> uids) async {
     final set = await load();
     set.addAll(uids);
     _cache = set.toList();
@@ -40,7 +48,12 @@ class ProcessedMailStore {
           .timeout(const Duration(seconds: 5));
       await prefs.setString(_kProcessed, jsonEncode(_cache))
           .timeout(const Duration(seconds: 5));
-    } catch (_) {}
+      lastError = null;
+      return true;
+    } catch (e) {
+      lastError = '$e';
+      return false;
+    }
   }
 
   /// 从候选里过滤掉已处理的，返回「未处理」的邮件

@@ -302,16 +302,22 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
                   // 时间信息卡片
                   _buildInfoCard(
                     icon: Icons.access_time_rounded,
-                    title: '时间',
+                    title: _event.isDeadline ? '截止时间' : '时间',
                     children: [
                       _buildInfoRow(
-                        '开始',
+                        _event.isDeadline ? '截止' : '开始',
                         DateFormat('yyyy年M月d日 HH:mm').format(_event.startTime),
                       ),
                       if (_event.endTime != null)
                         _buildInfoRow(
                           '结束',
                           DateFormat('yyyy年M月d日 HH:mm').format(_event.endTime!),
+                        ),
+                      // 固定场次 + 另附的截止期限（如笔试当天、测评另有截止）
+                      if (_event.deadline != null && !_event.isDeadline)
+                        _buildInfoRow(
+                          '截止期限',
+                          DateFormat('yyyy年M月d日 HH:mm').format(_event.deadline!),
                         ),
                     ],
                   ),

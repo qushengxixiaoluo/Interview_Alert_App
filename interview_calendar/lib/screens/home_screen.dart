@@ -40,14 +40,25 @@ class _HomeScreenState extends State<HomeScreen> {
       final monthEvents = await _db.getEventsForMonth(_currentMonth);
 
       final counts = <int, int>{};
+      // getEventsForMonth 会带回上月末/下月初的补位事件（用来铺满日历网格），
+      // 但它们不属于当前月，不能算进当前月的红点，否则 20 号的事件会串到下个月。
+      // 已完成的事件也不再算进红点 —— 标记完成就等于「已处理」，不该再提醒。
+      void bump(DateTime? d) {
+        if (d == null) return;
+        if (d.year != _currentMonth.year || d.month != _currentMonth.month) return;
+        counts[d.day] = (counts[d.day] ?? 0) + 1;
+      }
+
       for (final e in monthEvents) {
-        // getEventsForMonth 会带回上月末/下月初的补位事件（用来铺满日历网格），
-        // 但它们不属于当前月，不能算进当前月的红点，否则 20 号的事件会串到下个月。
-        // 已完成的事件也不再算进红点 —— 标记完成就等于「已处理」，不该再提醒。
-        if (!e.isCompleted &&
-            e.startTime.year == _currentMonth.year &&
-            e.startTime.month == _currentMonth.month) {
-          counts[e.startTime.day] = (counts[e.startTime.day] ?? 0) + 1;
+        if (e.isCompleted) continue;
+        bump(e.startTime);
+        // 带独立截止期限的事件，在期限那天也要有红点（期限与场次不同天时）
+        final dl = e.deadline;
+        if (dl != null &&
+            (dl.year != e.startTime.year ||
+                dl.month != e.startTime.month ||
+                dl.day != e.startTime.day)) {
+          bump(dl);
         }
       }
 

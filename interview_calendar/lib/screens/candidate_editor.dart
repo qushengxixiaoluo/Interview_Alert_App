@@ -40,6 +40,13 @@ class _CandidateEditorScreenState extends State<CandidateEditorScreen> {
   late DateTime _startTime;
   late String _round;
 
+  /// 「时间类型」开关：true = 下面那个时间是截止期限（如「10月15日前完成测评」），
+  /// 不是面试/笔试的开始时间。
+  late bool _deadlineMode;
+
+  /// 非截止模式下的附加期限（有固定场次、另有一个截止点）
+  late DateTime? _extraDeadline;
+
   static const _rounds = ['一面', '二面', '三面', '终面', 'HR面', '笔试', '测评'];
 
   @override
@@ -51,7 +58,10 @@ class _CandidateEditorScreenState extends State<CandidateEditorScreen> {
     _locationCtrl = TextEditingController(text: r.location);
     _meetingUrlCtrl = TextEditingController(text: r.meetingUrl);
     _durationCtrl = TextEditingController(text: r.durationMinutes.toString());
-    _startTime = r.startTime ?? DateTime.now();
+    // 纯截止类进来时 startTime 是空的，锚点在 deadline 上
+    _deadlineMode = r.isDeadlineOnly;
+    _startTime = r.startTime ?? r.deadline ?? DateTime.now();
+    _extraDeadline = r.isDeadlineOnly ? null : r.deadline;
     _round = r.round;
   }
 
@@ -99,7 +109,9 @@ class _CandidateEditorScreenState extends State<CandidateEditorScreen> {
       company: company,
       role: role,
       round: _round,
-      startTime: _startTime,
+      // 截止模式：时间放进 deadline、场次留空 → 下游按「截止事件」处理
+      startTime: _deadlineMode ? null : _startTime,
+      deadline: _deadlineMode ? _startTime : _extraDeadline,
       durationMinutes: duration,
       timeIsExplicit: widget.initial.timeIsExplicit,
       location: location,
@@ -112,6 +124,36 @@ class _CandidateEditorScreenState extends State<CandidateEditorScreen> {
       rawJson: widget.initial.rawJson,
     );
     Navigator.pop(context, updated);
+  }
+
+  /// 什么情况下展示「这是截止时间」开关：类别是测评、轮次是笔试/测评，
+  /// 或者 AI 原本就抽出了截止时间（避免用户把截止改成场次后开关又消失）
+  bool get _canToggleDeadlineMode =>
+      _deadlineMode ||
+      widget.initial.category == 'assessment' ||
+      _round == '笔试' ||
+      _round == '测评' ||
+      widget.initial.deadline != null;
+
+  /// 附加期限选择器：只在「有固定场次」时才有意义
+  bool get _showExtraDeadline => !_deadlineMode && _canToggleDeadlineMode;
+
+  Future<void> _pickExtraDeadline() async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _extraDeadline ?? _startTime,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2030),
+    );
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(_extraDeadline ?? _startTime),
+    );
+    if (time == null) return;
+    setState(() {
+      _extraDeadline = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+    });
   }
 
   @override
@@ -153,7 +195,14 @@ class _CandidateEditorScreenState extends State<CandidateEditorScreen> {
           const SizedBox(height: 16),
           _buildField('轮次', _buildRoundSelector()),
           const SizedBox(height: 16),
-          _buildField('开始时间 *', _buildTimeSelector()),
+          _buildField(_deadlineMode ? '截止时间 *' : '开始时间 *', _buildTimeSelector()),
+          const SizedBox(height: 12),
+          // 时间类型开关：测评/笔试常见「只有截止」的邮件，别让它伪装成面试场次
+          if (_canToggleDeadlineMode) _buildDeadlineModeSwitch(),
+          if (_showExtraDeadline) ...[
+            const SizedBox(height: 16),
+            _buildField('截止期限（可选）', _buildExtraDeadlineSelector()),
+          ],
           const SizedBox(height: 16),
           _buildField('时长（分钟）', _buildTextFiled(_durationCtrl, '60', number: true)),
           const SizedBox(height: 16),
@@ -288,7 +337,11 @@ class _CandidateEditorScreenState extends State<CandidateEditorScreen> {
         ),
         child: Row(
           children: [
-            const Icon(Icons.access_time_rounded, size: 20, color: AppTheme.primary),
+            Icon(
+              _deadlineMode ? Icons.hourglass_bottom_rounded : Icons.access_time_rounded,
+              size: 20,
+              color: _deadlineMode ? AppTheme.warning : AppTheme.primary,
+            ),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
@@ -299,6 +352,77 @@ class _CandidateEditorScreenState extends State<CandidateEditorScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildDeadlineModeSwitch() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: AppTheme.outline, width: AppTheme.outlineWidth),
+        borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+      ),
+      child: Row(
+        children: [
+          const Expanded(
+            child: Text(
+              '这是截止时间（在此前完成即可，不是面试开始时间）',
+              style: TextStyle(fontSize: 13, color: AppTheme.textPrimary),
+            ),
+          ),
+          Switch(
+            value: _deadlineMode,
+            activeThumbColor: AppTheme.primary,
+            onChanged: (v) => setState(() => _deadlineMode = v),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExtraDeadlineSelector() {
+    return Row(
+      children: [
+        Expanded(
+          child: GestureDetector(
+            onTap: _pickExtraDeadline,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border.all(color: AppTheme.outline, width: AppTheme.outlineWidth),
+                borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.hourglass_bottom_rounded, size: 20, color: AppTheme.warning),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      _extraDeadline == null
+                          ? '未设置'
+                          : DateFormat('yyyy年M月d日 HH:mm').format(_extraDeadline!),
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: _extraDeadline == null
+                            ? AppTheme.textSecondary
+                            : AppTheme.textPrimary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        if (_extraDeadline != null)
+          IconButton(
+            tooltip: '清除',
+            icon: const Icon(Icons.clear_rounded, size: 18, color: AppTheme.textSecondary),
+            onPressed: () => setState(() => _extraDeadline = null),
+          ),
+      ],
     );
   }
 }

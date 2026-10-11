@@ -36,6 +36,11 @@ class _EventFormScreenState extends State<EventFormScreen> {
   EventColor _color = EventColor.blue;
   bool _saving = false;
 
+  /// 时间类型开关 + 附加期限。之前这两项只在保存时无条件回带，
+  /// AI 误判成截止类后用户没有任何路径改回来（也没有清除期限的入口）。
+  late bool _isDeadline;
+  DateTime? _deadline;
+
   /// 只有带数据库 id 的才叫「编辑」。
   ///
   /// AI 助手「编辑后保存」传进来的 existingEvent 是预填好、但 id 为 null 的事件，
@@ -59,6 +64,8 @@ class _EventFormScreenState extends State<EventFormScreen> {
     _endTime = e?.endTime;
     _round = e?.round;
     _color = e?.color ?? EventColor.blue;
+    _isDeadline = e?.isDeadline ?? false;
+    _deadline = e?.deadline;
   }
 
   @override
@@ -89,6 +96,27 @@ class _EventFormScreenState extends State<EventFormScreen> {
 
     setState(() {
       _startTime = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+    });
+  }
+
+  Future<void> _pickDeadline() async {
+    final initial = _deadline ?? _startTime;
+    final date = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2030),
+    );
+    if (date == null || !mounted) return;
+
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(initial),
+    );
+    if (time == null) return;
+
+    setState(() {
+      _deadline = DateTime(date.year, date.month, date.day, time.hour, time.minute);
     });
   }
 
@@ -127,11 +155,17 @@ class _EventFormScreenState extends State<EventFormScreen> {
       role: _roleCtrl.text.trim().isEmpty ? null : _roleCtrl.text.trim(),
       round: _round,
       startTime: _startTime,
-      endTime: _endTime,
+      // 截止类事件没有「场次时长」的概念，结束时间不适用
+      endTime: _isDeadline ? null : _endTime,
       location: _locationCtrl.text.trim().isEmpty ? null : _locationCtrl.text.trim(),
       meetingUrl: _meetingUrlCtrl.text.trim().isEmpty ? null : _meetingUrlCtrl.text.trim(),
       color: _color,
       notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+      // 截止标记/期限由表单状态决定（可切换、可清除）；
+      // 完成标记表单里没有对应输入，编辑时必须原样保留（旧版本漏传丢过）
+      deadline: _isDeadline ? null : _deadline,
+      isDeadline: _isDeadline,
+      completedAt: widget.existingEvent?.completedAt,
       createdAt: widget.existingEvent?.createdAt ?? now,
       updatedAt: now,
     );
@@ -220,9 +254,9 @@ class _EventFormScreenState extends State<EventFormScreen> {
 
             const SizedBox(height: 16),
 
-            // 开始时间
+            // 开始时间（截止模式下这个时间就是截止点）
             _buildField(
-              label: '开始时间 *',
+              label: _isDeadline ? '截止时间 *' : '开始时间 *',
               child: _buildTimeSelector(
                 time: _startTime,
                 onTap: _pickStartTime,
@@ -231,15 +265,62 @@ class _EventFormScreenState extends State<EventFormScreen> {
 
             const SizedBox(height: 12),
 
-            // 结束时间
-            _buildField(
-              label: '结束时间',
-              child: _buildTimeSelector(
-                time: _endTime,
-                isOptional: true,
-                onTap: _pickEndTime,
+            // 结束时间（截止类没有时长，隐藏）
+            if (!_isDeadline)
+              _buildField(
+                label: '结束时间',
+                child: _buildTimeSelector(
+                  time: _endTime,
+                  isOptional: true,
+                  onTap: _pickEndTime,
+                ),
               ),
+
+            const SizedBox(height: 12),
+
+            // 时间类型开关：AI 误判成截止类时，用户靠它改回场次
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    '这是截止时间（在此前完成即可，不是面试开始时间）',
+                    style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+                  ),
+                ),
+                Switch(
+                  value: _isDeadline,
+                  activeThumbColor: AppTheme.primary,
+                  onChanged: (v) => setState(() => _isDeadline = v),
+                ),
+              ],
             ),
+
+            // 附加期限：场次模式下常驻（未设置也能点进去加，已设置可改可清除）
+            if (!_isDeadline) ...[
+              const SizedBox(height: 12),
+              _buildField(
+                label: '截止期限（可选）',
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _buildTimeSelector(
+                        time: _deadline,
+                        isOptional: true,
+                        onTap: _pickDeadline,
+                        icon: Icons.hourglass_bottom_rounded,
+                      ),
+                    ),
+                    if (_deadline != null)
+                      IconButton(
+                        tooltip: '清除期限',
+                        icon: const Icon(Icons.clear_rounded,
+                            size: 18, color: AppTheme.textSecondary),
+                        onPressed: () => setState(() => _deadline = null),
+                      ),
+                  ],
+                ),
+              ),
+            ],
 
             const SizedBox(height: 16),
 
@@ -362,6 +443,7 @@ class _EventFormScreenState extends State<EventFormScreen> {
     required DateTime? time,
     required VoidCallback onTap,
     bool isOptional = false,
+    IconData icon = Icons.access_time_rounded,
   }) {
     final text = time != null
         ? DateFormat('yyyy年M月d日 HH:mm').format(time)
@@ -387,7 +469,7 @@ class _EventFormScreenState extends State<EventFormScreen> {
         child: Row(
           children: [
             Icon(
-              Icons.access_time_rounded,
+              icon,
               size: 20,
               color: hasValue ? AppTheme.primary : AppTheme.textSecondary,
             ),

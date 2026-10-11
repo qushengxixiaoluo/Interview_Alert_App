@@ -12,7 +12,10 @@ class EventCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final timeStr = DateFormat('HH:mm').format(event.startTime);
+    // 截止类事件：时间轴上标「截止」而不是裸时间，一眼分清是日程还是期限
+    final timeStr = event.isDeadline
+        ? '截止 ${DateFormat('HH:mm').format(event.startTime)}'
+        : DateFormat('HH:mm').format(event.startTime);
     // 已完成的事件整体转灰，让「还没参加的」在列表里一眼可辨
     final color = event.isCompleted ? AppTheme.textSecondary : event.color.color;
 
@@ -149,6 +152,14 @@ class EventCard extends StatelessWidget {
                         const SizedBox(height: 4),
                         _buildIconText(Icons.link, '有会议链接'),
                       ],
+                      // 有独立的附加截止期限时提示出来（场次在上面的芯片里）
+                      if (event.deadline != null && !event.isDeadline) ...[
+                        const SizedBox(height: 4),
+                        _buildIconText(
+                          Icons.hourglass_bottom_rounded,
+                          '截止 ${DateFormat('M月d日 HH:mm').format(event.deadline!)}',
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -180,7 +191,7 @@ class EventCard extends StatelessWidget {
 
     return Row(
       children: [
-        Icon(Icons.business_outlined, size: 14, color: AppTheme.textSecondary),
+        const Icon(Icons.business_outlined, size: 14, color: AppTheme.textSecondary),
         const SizedBox(width: 4),
         Expanded(
           child: Text(

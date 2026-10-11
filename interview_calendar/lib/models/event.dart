@@ -17,6 +17,9 @@ enum EventColor {
 }
 
 /// 面试轮次
+///
+/// 注意：DB 里按 index 存（round_index），新枚举值只能**追加到末尾**，
+/// 插在中间会让旧数据错位到别的轮次。
 enum InterviewRound {
   first('一面'),
   second('二面'),
@@ -24,7 +27,8 @@ enum InterviewRound {
   written('笔试'),
   assessment('测评'),
   hr('HR面'),
-  other('其他');
+  other('其他'),
+  third('三面');
 
   final String label;
   const InterviewRound(this.label);
@@ -46,6 +50,14 @@ class InterviewEvent {
   final DateTime createdAt;
   final DateTime updatedAt;
 
+  /// 附加截止期限：事件本身有固定场次，但另有一个「之前要完成」的期限
+  /// （例如笔试有固定时间、测评另有截止）。为 null 表示没有独立期限。
+  final DateTime? deadline;
+
+  /// startTime 存的其实是截止时间（纯截止类任务，如「10月15日前完成测评」）。
+  /// 展示时把「开始」换成「截止」，且不锁「标记完成」按钮。
+  final bool isDeadline;
+
   /// 标记完成的时刻。null 表示还没完成。
   /// 用时间戳而不是 bool：既能表达「有没有完成」，又留了「什么时候完成的」这个信息，
   /// 存储成本一样。
@@ -65,6 +77,8 @@ class InterviewEvent {
     this.meetingUrl,
     this.color = EventColor.blue,
     this.notes,
+    this.deadline,
+    this.isDeadline = false,
     this.completedAt,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -75,7 +89,9 @@ class InterviewEvent {
   ///
   /// 提前标记完成会让「哪些面试还没参加」这个信息失真，
   /// 所以开始时间之前一律不允许。
-  bool get hasStarted => !DateTime.now().isBefore(startTime);
+  /// 例外：截止类事件（isDeadline）是待办而不是日程 ——
+  /// 「10 号前完成测评」9 号做完了当然要能打勾。
+  bool get hasStarted => isDeadline || !DateTime.now().isBefore(startTime);
 
   /// 距离可以标记完成还有多久（已经可以时返回 null）
   Duration? get timeUntilCompletable =>
@@ -98,6 +114,8 @@ class InterviewEvent {
       'meeting_url': meetingUrl,
       'color_index': color.index,
       'notes': notes,
+      'deadline': deadline?.millisecondsSinceEpoch,
+      'is_deadline': isDeadline ? 1 : 0,
       'completed_at': completedAt?.millisecondsSinceEpoch,
       'created_at': createdAt.millisecondsSinceEpoch,
       'updated_at': DateTime.now().millisecondsSinceEpoch,
@@ -116,6 +134,9 @@ class InterviewEvent {
     final completedMs = asInt(map['completed_at']);
     final createdMs = asInt(map['created_at']);
     final updatedMs = asInt(map['updated_at']);
+    final deadlineMs = asInt(map['deadline']);
+    // 旧版本的行没有这两列 → 默认「不是截止事件、没有期限」
+    final isDeadline = asInt(map['is_deadline']) == 1;
 
     return InterviewEvent(
       id: asInt(map['id']),
@@ -133,6 +154,8 @@ class InterviewEvent {
           ? EventColor.values[colorIndex]
           : EventColor.blue,
       notes: map['notes'] as String?,
+      deadline: deadlineMs != null ? DateTime.fromMillisecondsSinceEpoch(deadlineMs) : null,
+      isDeadline: isDeadline,
       completedAt: completedMs != null ? DateTime.fromMillisecondsSinceEpoch(completedMs) : null,
       createdAt: DateTime.fromMillisecondsSinceEpoch(createdMs ?? DateTime.now().millisecondsSinceEpoch),
       updatedAt: DateTime.fromMillisecondsSinceEpoch(updatedMs ?? DateTime.now().millisecondsSinceEpoch),
@@ -151,8 +174,11 @@ class InterviewEvent {
     String? meetingUrl,
     EventColor? color,
     String? notes,
+    DateTime? deadline,
+    bool? isDeadline,
     DateTime? completedAt,
     bool clearCompleted = false,
+    bool clearDeadline = false,
   }) {
     return InterviewEvent(
       id: id ?? this.id,
@@ -166,6 +192,10 @@ class InterviewEvent {
       meetingUrl: meetingUrl ?? this.meetingUrl,
       color: color ?? this.color,
       notes: notes ?? this.notes,
+      // 置空同样需要显式开关，否则「清除期限」会被 ?? 挡掉
+      deadline: clearDeadline ? null : (deadline ?? this.deadline),
+      // 用 bool? 而不是 bool 默认 false：否则「没传」会把已有的 true 冲掉
+      isDeadline: isDeadline ?? this.isDeadline,
       // 置空需要用显式开关，否则「取消完成」会被 ?? 挡掉，取消不掉
       completedAt: clearCompleted ? null : (completedAt ?? this.completedAt),
       createdAt: createdAt,

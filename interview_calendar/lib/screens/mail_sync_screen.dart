@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/database.dart';
+import '../services/failed_mail_store.dart';
 import '../services/mail_config_store.dart';
 import '../services/mail_cursor_store.dart';
 import '../services/processed_mail_store.dart';
@@ -109,6 +110,14 @@ class _MailSyncScreenState extends State<MailSyncScreen> {
           c.result,
           sourceNote: '来源邮件：${c.mail.displaySubject}（${c.mail.displayFrom}）',
         );
+        if (event == null) {
+          // 正常不会发生（进清单前校验过时间），真发生了也不能崩 ——
+          // 但必须记为已处理：否则 selected 数数到齐会推游标，这封信
+          // 既不在已处理名单也不在候选里，随游标永久丢失
+          skipped++;
+          handledUids.add(c.mail.uid);
+          continue;
+        }
         final dup = findDuplicateEvent(event, existing);
 
         if (dup == null) {
@@ -134,8 +143,11 @@ class _MailSyncScreenState extends State<MailSyncScreen> {
         switch (action) {
           case DupAction.overwrite:
             final idx = existing.indexOf(dup);
-            await _db.updateEvent(event.copyWith(id: dup.id));
-            if (idx >= 0) existing[idx] = event.copyWith(id: dup.id);
+            // 覆盖时保留原事件的完成标记 —— 新抽取结果里没有它，直接换会把
+            // 「已参加/已完成」冲掉
+            final merged = event.copyWith(id: dup.id, completedAt: dup.completedAt);
+            await _db.updateEvent(merged);
+            if (idx >= 0) existing[idx] = merged;
             overwritten++;
             handledUids.add(c.mail.uid);
             if (latestDate == null || event.startTime.isAfter(latestDate)) {
@@ -163,9 +175,17 @@ class _MailSyncScreenState extends State<MailSyncScreen> {
       }
 
       await ProcessedMailStore.markProcessed(handledUids);
-      // 全部候选都已处理完才推进游标；部分勾选时保留未处理的，下次仍会显示
+      // 全部候选都已处理完才推进游标；部分勾选时保留未处理的，下次仍会显示。
+      // 游标推进统一走 session.advanceCursor —— 识别失败的邮件会拦住它不放行。
       if (selected.length == _candidates.length) {
         await _session.advanceCursor();
+        if (await _session.cursorBlocked) {
+          _show(
+            '有 ${_session.failedMailCount} 封识别失败，游标未推进 —— '
+            '修复 AI 配置后重新同步即可找回这些邮件',
+            isError: true,
+          );
+        }
       }
       if (!mounted) return;
 
@@ -178,6 +198,7 @@ class _MailSyncScreenState extends State<MailSyncScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(msg), backgroundColor: AppTheme.success),
       );
+      _warnIfProcessedNotSaved();
       Navigator.pop(context, latestDate);
     } catch (e) {
       if (!mounted) return;
@@ -199,11 +220,18 @@ class _MailSyncScreenState extends State<MailSyncScreen> {
         _candidates.removeWhere((c) => selected.contains(c));
         _saving = false;
       });
-      // 清单已空 → 游标推进到本次最新
+      // 清单已空 → 游标推进到本次最新（内部有失败闸门，拦住时给提示）
       if (_candidates.isEmpty) {
         await _session.advanceCursor();
+        if (await _session.cursorBlocked) {
+          _show(
+            '已忽略，但有识别失败的邮件，游标未推进 —— 修复 AI 后重新同步可找回',
+            isError: true,
+          );
+        }
       }
       _show('已忽略 ${selected.length} 封，下次不再提示');
+      _warnIfProcessedNotSaved();
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
@@ -232,6 +260,13 @@ class _MailSyncScreenState extends State<MailSyncScreen> {
         duration: const Duration(seconds: 2),
       ),
     );
+  }
+
+  /// 「已处理记录」没存住时提醒 —— 后果只是下次会重复出现清单，不丢数据，
+  /// 但用户需要知道为什么它又冒出来了。
+  void _warnIfProcessedNotSaved() {
+    if (ProcessedMailStore.lastError == null) return;
+    _show('⚠ 已处理记录保存失败，下次同步这些邮件可能重复出现', isError: true);
   }
 
   @override
@@ -599,6 +634,41 @@ class _MailSyncScreenState extends State<MailSyncScreen> {
               ],
             ),
           ],
+          // 已处理记录没存住的常驻警告：让用户知道「清单又冒出来」不是 bug
+          if (ProcessedMailStore.lastError != null) ...[
+            const SizedBox(height: 6),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.warning_amber_rounded, size: 15, color: AppTheme.warning),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '「已处理」记录保存失败，重复识别可能再次出现。原因：${ProcessedMailStore.lastError}',
+                    style: const TextStyle(fontSize: 11, color: AppTheme.warning, height: 1.4),
+                  ),
+                ),
+              ],
+            ),
+          ],
+          // 失败记录存不住 → 放弃机制失效，游标闸门会一直拦（fail-safe 方向），
+          // 用户需要知道为什么游标不动
+          if (FailedMailStore.lastError != null) ...[
+            const SizedBox(height: 6),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.warning_amber_rounded, size: 15, color: AppTheme.warning),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '「识别失败」记录保存失败，失败邮件会一直拦住同步游标。原因：${FailedMailStore.lastError}',
+                    style: const TextStyle(fontSize: 11, color: AppTheme.warning, height: 1.4),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -650,7 +720,7 @@ class _MailSyncScreenState extends State<MailSyncScreen> {
       children: [
         Row(
           children: [
-            const Text('识别出面试邮件', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            const Text('识别出面试 / 测评', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
             const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -671,7 +741,8 @@ class _MailSyncScreenState extends State<MailSyncScreen> {
           children: [
             Expanded(
               child: OutlinedButton(
-                onPressed: (_saving || selectedCount == 0) ? null : _ignoreSelected,
+                // 同步进行中禁用：中途处理候选会在识别跑完前动游标，可能跳过未识别的批次
+                onPressed: (_saving || _syncing || selectedCount == 0) ? null : _ignoreSelected,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: AppTheme.textSecondary,
                   side: BorderSide(color: AppTheme.buttonOutline, width: AppTheme.outlineWidth),
@@ -684,7 +755,7 @@ class _MailSyncScreenState extends State<MailSyncScreen> {
             const SizedBox(width: 12),
             Expanded(
               child: ElevatedButton(
-                onPressed: (_saving || selectedCount == 0) ? null : _addSelected,
+                onPressed: (_saving || _syncing || selectedCount == 0) ? null : _addSelected,
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusMedium)),
@@ -726,13 +797,25 @@ class _MailSyncScreenState extends State<MailSyncScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(c.mail.displaySubject, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(c.mail.displaySubject,
+                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                        ),
+                        const SizedBox(width: 6),
+                        _categoryBadge(r.category),
+                      ],
+                    ),
                     const SizedBox(height: 3),
                     Text(c.mail.displayFrom, style: TextStyle(fontSize: 12, color: AppTheme.textSecondary.withValues(alpha: 0.8))),
                     const SizedBox(height: 8),
                     if (r.company.isNotEmpty) _row('公司', r.company),
-                    if (r.startTime != null) _row('时间', _formatDateTime(r.startTime!)),
-                    if (!r.timeIsExplicit) _row('⚠ 时间', '推算值，请核对'),
+                    if (r.startTime != null)
+                      _row('时间', _formatDateTime(r.startTime!)),
+                    // 纯截止类只显示截止行；有场次又另有期限则两行都有
+                    if (r.deadline != null) _row('截止', _formatDateTime(r.deadline!)),
+                    if (!r.timeIsExplicit && r.hasTime) _row('⚠ 时间', '推算值，请核对'),
                     Row(
                       children: [
                         Text('置信度 ${(r.confidence * 100).round()}%',
@@ -765,6 +848,32 @@ class _MailSyncScreenState extends State<MailSyncScreen> {
           SizedBox(width: 42, child: Text(label, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary))),
           Expanded(child: Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500))),
         ],
+      ),
+    );
+  }
+
+  /// 类别角标：一眼分清这封是面试、改期还是笔试/测评
+  static const Map<String, (String, Color)> _categoryStyles = {
+    'interview_invite': ('面试邀约', AppTheme.primary),
+    'reschedule': ('改期', AppTheme.accent),
+    'assessment': ('笔试/测评', AppTheme.warning),
+    'offer': ('Offer', AppTheme.success),
+    'rejection': ('拒信', AppTheme.textSecondary),
+    'cancel': ('已取消', AppTheme.badge),
+  };
+
+  Widget _categoryBadge(String category) {
+    final (label, color) = _categoryStyles[category] ?? ('其他', AppTheme.textSecondary);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.45), width: 1),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color),
       ),
     );
   }

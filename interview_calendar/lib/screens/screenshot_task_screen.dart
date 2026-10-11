@@ -35,6 +35,10 @@ class _ScreenshotTaskScreenState extends State<ScreenshotTaskScreen> {
   List<TaskCandidate> _tasks = [];
   String? _error;
 
+  /// 页面本地错误（读图失败、保存失败）。会话镜像刷新时不能把它冲掉 ——
+  /// 之前直接 `_error = _session.error`，本地错误会在下一次 notify 时凭空消失。
+  String? _localError;
+
   static const _maxImages = ScreenshotParseSession.maxImages;
 
   @override
@@ -60,7 +64,14 @@ class _ScreenshotTaskScreenState extends State<ScreenshotTaskScreen> {
     _progress = _session.progress;
     _recognizedText = _session.recognizedText;
     _tasks = _session.tasks;
-    _error = _session.error;
+    // 会话错误优先（识别失败更重要），本地错误兜底
+    _error = _session.error ?? _localError;
+  }
+
+  /// 设置/清除本地错误（不影响会话错误）
+  void _setLocalError(String? e) {
+    _localError = e;
+    _error = _session.error ?? e;
   }
 
   void _onSessionChanged() {
@@ -84,11 +95,13 @@ class _ScreenshotTaskScreenState extends State<ScreenshotTaskScreen> {
       if (imgs.length < picked.length) {
         _show('最多支持 $_maxImages 张截图，多余的已忽略', isError: true);
       }
-      // 图变了，旧的识别结果由会话统一作废并通知
+      // 图变了，旧的识别结果由会话统一作废并通知；
+      // 顺手清掉上一次的本地错误（这次读图成功了）
+      _setLocalError(null);
       _session.setImages(append ? [..._images, ...imgs] : imgs);
     } catch (e) {
       if (!mounted) return;
-      setState(() => _error = '读取图片失败：$e');
+      setState(() => _setLocalError('读取图片失败：$e'));
     }
   }
 
@@ -128,7 +141,7 @@ class _ScreenshotTaskScreenState extends State<ScreenshotTaskScreen> {
     if (selected.isEmpty || _saving) return;
 
     for (final c in selected) {
-      if (c.result.startTime == null) {
+      if (!c.result.hasTime) {
         _show('「${c.result.title}」还没有时间，点开卡片设置后再加入', isError: true);
         return;
       }
@@ -145,6 +158,10 @@ class _ScreenshotTaskScreenState extends State<ScreenshotTaskScreen> {
 
       for (final c in selected) {
         final event = eventFromExtraction(c.result, sourceNote: '来源：截图识别');
+        if (event == null) {
+          // 上面已校验过 hasTime，这里是兜底 —— 缺时间就跳过，不崩
+          continue;
+        }
         final dup = findDuplicateEvent(event, existing);
 
         if (dup == null) {
@@ -170,8 +187,10 @@ class _ScreenshotTaskScreenState extends State<ScreenshotTaskScreen> {
         switch (action) {
           case DupAction.overwrite:
             final idx = existing.indexOf(dup);
-            await _db.updateEvent(event.copyWith(id: dup.id));
-            if (idx >= 0) existing[idx] = event.copyWith(id: dup.id);
+            // 覆盖保留原事件的完成标记（新抽取结果里没有它）
+            final merged = event.copyWith(id: dup.id, completedAt: dup.completedAt);
+            await _db.updateEvent(merged);
+            if (idx >= 0) existing[idx] = merged;
             overwritten++;
             handled.add(c);
             if (latestDate == null || event.startTime.isAfter(latestDate)) {
@@ -214,7 +233,7 @@ class _ScreenshotTaskScreenState extends State<ScreenshotTaskScreen> {
       if (!mounted) return;
       setState(() {
         _saving = false;
-        _error = '保存失败：$e';
+        _setLocalError('保存失败：$e');
       });
     }
   }
@@ -601,9 +620,9 @@ class _ScreenshotTaskScreenState extends State<ScreenshotTaskScreen> {
                     if (r.role.isNotEmpty) _row('岗位', r.role),
                     if (r.round.isNotEmpty) _row('轮次', r.round),
                     if (r.startTime != null) _row('时间', _formatDateTime(r.startTime!)),
-                    if (r.startTime == null)
-                      _row('⚠ 时间', '未指定，点按设置'),
-                    if (r.startTime != null && !r.timeIsExplicit) _row('⚠ 时间', '推算值，请核对'),
+                    if (r.deadline != null) _row('截止', _formatDateTime(r.deadline!)),
+                    if (!r.hasTime) _row('⚠ 时间', '未指定，点按设置'),
+                    if (r.hasTime && !r.timeIsExplicit) _row('⚠ 时间', '推算值，请核对'),
                     Row(
                       children: [
                         const Spacer(),

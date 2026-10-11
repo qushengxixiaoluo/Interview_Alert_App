@@ -50,9 +50,14 @@ class IcsExport {
   static void _writeEvent(StringBuffer buffer, InterviewEvent event) {
     final uid = 'event-${event.id ?? DateTime.now().millisecondsSinceEpoch}@interview-calendar.local';
     final dtstart = _formatUtc(event.startTime);
-    final dtend = _formatUtc(
-      event.endTime ?? event.startTime.add(const Duration(hours: 1)),
-    );
+    // 截止类事件没有「持续一小时」的语义：不写 DTEND（RFC 5545 视为零时长事件），
+    // 否则 23:59 的截止会被外部日历画到第二天 00:59，次日还冒出一个点。
+    // 普通事件没设结束时间时仍按惯例补 1 小时。
+    final dtend = event.isDeadline
+        ? null
+        : _formatUtc(
+            event.endTime ?? event.startTime.add(const Duration(hours: 1)),
+          );
 
     buffer
       ..writeln('BEGIN:VEVENT')
@@ -61,9 +66,11 @@ class IcsExport {
       ..writeln('SEQUENCE:0')
       // 时间一律用 UTC 字面量：带 TZID 却缺少匹配的 VTIMEZONE 时，
       // 部分客户端会整体偏移 8 小时
-      ..writeln('DTSTART:$dtstart')
-      ..writeln('DTEND:$dtend')
-      ..writeln('SUMMARY:${_escape(_buildSummary(event))}');
+      ..writeln('DTSTART:$dtstart');
+    if (dtend != null) {
+      buffer.writeln('DTEND:$dtend');
+    }
+    buffer.writeln('SUMMARY:${_escape(_buildSummary(event))}');
 
     if (event.location != null && event.location!.isNotEmpty) {
       buffer.writeln('LOCATION:${_escape(event.location!)}');
@@ -84,7 +91,7 @@ class IcsExport {
         ..writeln('BEGIN:VALARM')
         ..writeln('TRIGGER:$trigger')
         ..writeln('ACTION:DISPLAY')
-        ..writeln('DESCRIPTION:面试提醒')
+        ..writeln('DESCRIPTION:${event.isDeadline ? '截止提醒' : '面试提醒'}')
         ..writeln('END:VALARM');
     }
 
@@ -92,11 +99,22 @@ class IcsExport {
   }
 
   static String _buildSummary(InterviewEvent event) {
+    // 按事件性质选前缀：截止类 → 「截止」；笔试/测评 → 用轮次名；其余 → 「面试」
+    final String prefix;
+    if (event.isDeadline) {
+      prefix = '截止';
+    } else if (event.round == InterviewRound.assessment ||
+        event.round == InterviewRound.written) {
+      prefix = event.round!.label;
+    } else {
+      prefix = '面试';
+    }
+
     var title = event.company != null && event.company!.isNotEmpty
-        ? '面试：${event.company}'
-        : '面试';
+        ? '$prefix：${event.company}'
+        : prefix;
     if (event.role != null && event.role!.isNotEmpty) title += ' - ${event.role}';
-    if (event.round != null) title += '（${event.round!.label}）';
+    if (event.round != null && !event.isDeadline) title += '（${event.round!.label}）';
     return title;
   }
 
@@ -105,6 +123,10 @@ class IcsExport {
     if (event.company != null && event.company!.isNotEmpty) lines.add('公司：${event.company}');
     if (event.role != null && event.role!.isNotEmpty) lines.add('岗位：${event.role}');
     if (event.round != null) lines.add('轮次：${event.round!.label}');
+    if (event.isDeadline) lines.add('这是截止时间，在此之前完成即可');
+    if (event.deadline != null && !event.isDeadline) {
+      lines.add('截止期限：${_formatLocal(event.deadline!)}');
+    }
     if (event.location != null && event.location!.isNotEmpty) lines.add('地点：${event.location}');
     if (event.meetingUrl != null && event.meetingUrl!.isNotEmpty) lines.add('会议链接：${event.meetingUrl}');
     if (event.notes != null && event.notes!.isNotEmpty) {
@@ -113,6 +135,11 @@ class IcsExport {
         ..add(event.notes!);
     }
     return lines.join('\\n');
+  }
+
+  static String _formatLocal(DateTime dt) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${dt.year}-${two(dt.month)}-${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}';
   }
 
   static String _formatUtc(DateTime dt) {
