@@ -1,4 +1,6 @@
+import '../models/event.dart';
 import '../models/mail_message.dart';
+import 'database.dart';
 import 'extraction_to_event.dart';
 import 'failed_mail_store.dart';
 import 'llm_service.dart';
@@ -177,6 +179,17 @@ class MailParseSession {
       final found = <MailCandidate>[];
       String? firstAiError;
       var fatalAiError = false;
+      var skippedExisting = 0;
+
+      // 日历现有事件（判重用，尽力加载）：时间范围回扫会把识别过的邮件再跑一遍，
+      // 已在日历的不该再进清单让用户重复审核。加载失败就退回旧行为（全部展示），
+      // 不能因为判重数据拿不到就让整个同步失败。
+      List<InterviewEvent> existingEvents = const [];
+      try {
+        existingEvents = await DatabaseService.instance.getAllEvents();
+      } catch (_) {
+        existingEvents = const [];
+      }
 
       // 批量送 AI：每批 8 封，一次请求通读多封全文，快且不漏
       const batchSize = 8;
@@ -243,6 +256,11 @@ class MailParseSession {
           // 识别成功 → 清掉历史失败记录（重新做人）
           await FailedMailStore.clearFailure(batch[i].uid);
           if (isActionableExtraction(r)) {
+            // 已在日历里的（之前识别过、加入过）→ 不进清单重复审核
+            if (matchesExistingEvent(r, existingEvents)) {
+              skippedExisting++;
+              continue;
+            }
             found.add(MailCandidate(batch[i], r));
           }
         }
@@ -264,6 +282,13 @@ class MailParseSession {
 
       status = ParseStatus.done;
       progress = '';
+      if (skippedExisting > 0) {
+        // 让用户看见「跳过」这件事，而不是疑惑怎么少了几封
+        fetchSummary = [
+          if (fetchSummary != null) fetchSummary,
+          '自动跳过 $skippedExisting 封（事件已在日历中）',
+        ].join('，');
+      }
       if (!_cancelled) {
         if (failedMailCount > 0) {
           final blocking =

@@ -1,4 +1,5 @@
 import '../models/event.dart';
+import 'event_dedup.dart';
 import 'llm_service.dart';
 
 /// 把 AI 抽取结果转成 InterviewEvent。
@@ -58,6 +59,17 @@ bool isActionableExtraction(ExtractionResult r) {
   const actionableCategories = {'interview_invite', 'reschedule', 'assessment'};
   if (!r.isInterview && !actionableCategories.contains(r.category)) return false;
   return r.hasTime;
+}
+
+/// 抽取结果是否对应「日历里已经有的事件」。
+///
+/// 时间范围回扫（或游标没记过的渠道加进来的事件）会把识别过的邮件再跑一遍 ——
+/// 已在日历的不应该再进待确认清单让用户重复审核，在清单入口就用这个拦掉。
+/// 注意：跳过但不标记已处理 —— 用户之后删掉日历事件，重新识别还能再进清单。
+bool matchesExistingEvent(ExtractionResult r, List<InterviewEvent> existing) {
+  final evt = eventFromExtraction(r);
+  if (evt == null) return false;
+  return findDuplicateEvent(evt, existing) != null;
 }
 
 /// 该类别的结果不该进日历（取消 / 拒信 / Offer）。

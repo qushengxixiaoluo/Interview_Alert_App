@@ -8,6 +8,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:interview_calendar/models/event.dart';
 import 'package:interview_calendar/services/event_dedup.dart';
+import 'package:interview_calendar/services/extraction_to_event.dart';
+import 'package:interview_calendar/services/llm_service.dart';
 
 InterviewEvent _ev({
   required String title,
@@ -92,5 +94,53 @@ void main() {
     final incoming =
         _ev(title: '测评截止', company: 'Acme', role: '后端', isDeadline: true, startTime: t);
     expect(findDuplicateEvent(incoming, existing), isNotNull);
+  });
+
+  // matchesExistingEvent：时间范围回扫时「识别过、已在日历」的候选自动跳过的判定
+  group('matchesExistingEvent（已在日历的不进重复审核清单）', () {
+    final existing = [
+      _ev(title: '字节跳动', company: '字节跳动', round: InterviewRound.first,
+          startTime: DateTime(2026, 10, 15, 14, 30)),
+    ];
+
+    test('同公司同时刻的抽取结果 → 命中，跳过', () {
+      final r = ExtractionResult(
+        isInterview: true,
+        category: 'interview_invite',
+        company: '字节跳动',
+        round: '一面',
+        startTime: DateTime(2026, 10, 15, 14, 32),
+      );
+      expect(matchesExistingEvent(r, existing), isTrue);
+    });
+
+    test('不同时间/不同公司 → 不命中，照常进清单', () {
+      final otherTime = ExtractionResult(
+        isInterview: true,
+        category: 'interview_invite',
+        company: '字节跳动',
+        round: '一面',
+        startTime: DateTime(2026, 10, 20, 10),
+      );
+      expect(matchesExistingEvent(otherTime, existing), isFalse);
+
+      final otherCompany = ExtractionResult(
+        isInterview: true,
+        category: 'interview_invite',
+        company: '别家公司',
+        round: '一面',
+        startTime: DateTime(2026, 10, 15, 14, 31),
+      );
+      expect(matchesExistingEvent(otherCompany, existing), isFalse);
+    });
+
+    test('没有时间锚点 → 不命中（false，不误杀）', () {
+      const noTime = ExtractionResult(
+        isInterview: true,
+        category: 'interview_invite',
+        company: '字节跳动',
+      );
+      expect(matchesExistingEvent(noTime, existing), isFalse);
+    });
   });
 }
